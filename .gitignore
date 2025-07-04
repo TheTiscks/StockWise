@@ -1,0 +1,93 @@
+### Общие правила ###
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.bak
+*.cache
+
+### Секреты и конфиги ###
+.env
+.env.local
+*.key
+*.pem
+*credentials*.json
+*secrets*.yaml
+appsettings.Development.json
+
+### Java/Kotlin (IntelliJ) ###
+# Билд-артефакты
+target/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+.gradle/
+out/
+
+# Файлы IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Maven
+dependency-reduced-pom.xml
+maven-*.jar
+
+### Python (PyCharm) ###
+# Байт-код
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Виртуальные окружения
+.venv/
+venv/
+env/
+.python-version
+
+# Анализ кода
+.pytest_cache/
+.mypy_cache/
+.coverage
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Модели ML (исключить тяжелые файлы)
+ml-service/models/*.pkl
+ml-service/models/*.h5
+ml-service/models/*.joblib
+
+### C#/.NET (Rider) ###
+# Артефакты сборки
+bin/
+obj/
+*.nupkg
+
+# Файлы IDE
+.vs/
+_ReSharper.*
+*.suo
+*.user
+*.userprefs
+
+### Docker/Kubernetes ###
+docker-compose.override.yml
+infrastructure/k8s/*-local.yaml
+
+### Тестовые данные ###
+/test-results/
+/coverage/
+
+### Системные файлы ###
+~$*
+*.swp
+*.swo
+
+### Исключения (разрешить) ###
+!gradle/wrapper/gradle-wrapper.jar
+!blazor-ui/appsettings.json
+!ml-service/requirements.txt
+!.idea/modules.xml
+!.idea/misc.xml
