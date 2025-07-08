@@ -1,0 +1,23 @@
+@page "/dashboard"
+
+<h3>Inventory Dashboard</h3>
+
+<RadzenChart>
+    <RadzenColumnSeries Data=@inventoryData />
+</RadzenChart>
+
+@code {
+    private List<InventoryItem> inventoryData = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Заглушка для тестирования
+        inventoryData = new List<InventoryItem>
+        {
+            new() { Product = "Item A", Stock = 42 },
+            new() { Product = "Item B", Stock = 15 }
+        };
+    }
+
+    class InventoryItem { public string Product; public int Stock; }
+}

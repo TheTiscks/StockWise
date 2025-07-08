@@ -1,0 +1,11 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: inventory-updates
+  labels:
+    app: inventory-system
+spec:
+  partitions: 3
+  replicas: 2
+  config:
+    retention.ms: 604800000  # 7 дней
