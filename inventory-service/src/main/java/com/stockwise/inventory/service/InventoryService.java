@@ -1,40 +1,47 @@
-package com.stockwise.inventory.service;
-
-@Service
+// Добавляем поддержку пакетных операций
 @Transactional
-public class InventoryService {
-    private final InventoryRepository repository;
-    private final ProductRepository productRepository;
+public List<InventoryItem> bulkUpdate(List<InventoryItem> updates) {
+    return updates.stream()
+            .map(update -> {
+                InventoryItem item = repository.findById(update.getId())
+                        .orElseThrow(() -> new InventoryNotFoundException(update.getId()));
+                item.setQuantity(update.getQuantity());
+                return repository.save(item);
+            })
+            .collect(Collectors.toList());
+}
 
-    public InventoryItem addInventoryItem(InventoryItem item) {
-        // Проверяем существование продукта
-        UUID productId = item.getProduct().getProductId();
-        Product product = productRepository.findById(productId)
-                .orElseThrow(() -> new ProductNotFoundException(productId));
-        item.setProduct(product);
+// Реализуем историю изменений
+public List<InventoryHistory> getInventoryHistory(UUID productId) {
+    return historyRepository.findByProductProductIdOrderByTimestampDesc(productId);
+}
 
-        return repository.save(item);
+private void recordHistory(InventoryItem item, String action) {
+    InventoryHistory history = new InventoryHistory();
+    history.setInventoryItem(item);
+    history.setAction(action);
+    history.setQuantityChange(item.getQuantity());
+    history.setTimestamp(Instant.now());
+    historyRepository.save(history);
+}
+
+// Обновляем метод adjustStock
+public InventoryItem adjustStock(Long itemId, int delta) {
+    InventoryItem item = repository.findById(itemId)
+            .orElseThrow(() -> new InventoryNotFoundException(itemId));
+
+    int oldQuantity = item.getQuantity();
+    int newQuantity = oldQuantity + delta;
+
+    if (newQuantity < 0) {
+        throw new InsufficientStockException("Cannot reduce stock below zero");
     }
 
-    public InventoryItem adjustStock(Long itemId, int delta) {
-        InventoryItem item = repository.findById(itemId)
-                .orElseThrow(() -> new InventoryNotFoundException(itemId));
+    item.setQuantity(newQuantity);
+    InventoryItem updated = repository.save(item);
 
-        int newQuantity = item.getQuantity() + delta;
-        if (newQuantity < 0) {
-            throw new InsufficientStockException("Cannot reduce stock below zero");
-        }
+    // Записываем историю
+    recordHistory(item, "ADJUSTMENT");
 
-        item.setQuantity(newQuantity);
-        return repository.save(item);
-    }
-
-    @Transactional
-    public void transferStock(Long fromId, Long toId, int quantity) {
-        // Уменьшаем количество на складе-источнике
-        adjustStock(fromId, -quantity);
-
-        // Увеличиваем количество на целевом складе
-        adjustStock(toId, quantity);
-    }
+    return updated;
 }
