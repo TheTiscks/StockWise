@@ -1,68 +1,92 @@
-package com.stockwise.inventory.event;
+// Добавляем обработку компенсационных событий
+@KafkaListener(topics = "inventory-compensation")
+public void handleCompensationEvent(String productId, int quantity) {
+    try {
+        UUID productUuid = UUID.fromString(productId);
+        inventoryService.adjustStockByProduct(productUuid, quantity);
+    } catch (Exception e) {
+        // Отправка в DLQ при ошибках
+        kafkaTemplate.send("inventory-dlq", productId, quantity);
+    }
+}
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.stockwise.inventory.service.InventoryService;
-import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework.stereotype.Component;
+// Механизм идемпотентности
+@KafkaListener(topics = "${kafka.topics.order-events}")
+public void handleOrderEvent(
+        String message,
+        @Header(KafkaHeaders.RECEIVED_KEY) String eventId) {
 
-@Component
-public class OrderEventListener {
-    private final InventoryService inventoryService;
-    private final ObjectMapper objectMapper;
-
-    public OrderEventListener(InventoryService inventoryService, ObjectMapper objectMapper) {
-        this.inventoryService = inventoryService;
-        this.objectMapper = objectMapper;
+    // Проверка на дубликаты
+    if (eventRepository.existsByEventId(eventId)) {
+        log.info("Event with id {} already processed. Skipping.", eventId);
+        return;
     }
 
-    @KafkaListener(topics = "${kafka.topics.order-events}", groupId = "inventory-service-group")
-    public void handleOrderEvent(String message) {
-        try {
-            OrderEvent event = objectMapper.readValue(message, OrderEvent.class);
+    try {
+        // Десериализация события
+        OrderEvent event = objectMapper.readValue(message, OrderEvent.class);
 
-            if ("ORDER_FULFILLED".equals(event.getEventType())) {
-                for (OrderEvent.OrderItem item : event.getItems()) {
-                    inventoryService.adjustStockByProduct(
-                            item.getProductId(),
-                            -item.getQuantity()  // Уменьшаем запас
-                    );
-                }
-            }
-            else if ("ORDER_CANCELLED".equals(event.getEventType())) {
-                for (OrderEvent.OrderItem item : event.getItems()) {
-                    inventoryService.adjustStockByProduct(
-                            item.getProductId(),
-                            item.getQuantity()  // Возвращаем товар
-                    );
-                }
-            }
-        } catch (JsonProcessingException e) {
-            // Реальная система: добавить логирование и обработку ошибок
-            System.err.println("Error processing Kafka message: " + e.getMessage());
+        // Обработка разных типов событий
+        switch (event.getEventType()) {
+            case "ORDER_FULFILLED":
+                processOrderFulfilled(event);
+                break;
+
+            case "ORDER_CANCELLED":
+                processOrderCancelled(event);
+                break;
+
+            case "ORDER_CREATED":
+                log.info("Order {} created. No inventory action needed.", event.getOrderId());
+                break;
+
+            default:
+                log.warn("Unknown event type: {}", event.getEventType());
+        }
+
+        // Сохранение ID обработанного события
+        ProcessedEvent processedEvent = new ProcessedEvent();
+        processedEvent.setEventId(eventId);
+        processedEvent.setProcessedAt(Instant.now());
+        eventRepository.save(processedEvent);
+
+    } catch (JsonProcessingException e) {
+        log.error("JSON parsing error: {}", e.getMessage());
+    } catch (InventoryException e) {
+        log.error("Inventory processing error: {}", e.getMessage());
+        // Отправка в DLQ при бизнес-ошибках
+        kafkaTemplate.send("inventory-dlq", eventId, message);
+    } catch (Exception e) {
+        log.error("Unexpected error: {}", e.getMessage());
+    }
+}
+
+private void processOrderFulfilled(OrderEvent event) {
+    for (OrderEvent.OrderItem item : event.getItems()) {
+        try {
+            inventoryService.adjustStockByProduct(
+                    item.getProductId(),
+                    -item.getQuantity()  // Уменьшаем количество товара
+            );
+            log.info("Reduced stock for product {} by {}",
+                    item.getProductId(), item.getQuantity());
+        } catch (ProductNotFoundException e) {
+            log.warn("Product not found: {}", item.getProductId());
         }
     }
+}
 
-    // Внутренний DTO для десериализации событий
-    public static class OrderEvent {
-        private String eventType;
-        private List<OrderItem> items;
-
-        // Геттеры/сеттеры
-        public String getEventType() { return eventType; }
-        public void setEventType(String eventType) { this.eventType = eventType; }
-        public List<OrderItem> getItems() { return items; }
-        public void setItems(List<OrderItem> items) { this.items = items; }
-
-        public static class OrderItem {
-            private UUID productId;
-            private int quantity;
-
-            // Геттеры/сеттеры
-            public UUID getProductId() { return productId; }
-            public void setProductId(UUID productId) { this.productId = productId; }
-            public int getQuantity() { return quantity; }
-            public void setQuantity(int quantity) { this.quantity = quantity; }
+private void processOrderCancelled(OrderEvent event) {
+    for (OrderEvent.OrderItem item : event.getItems()) {
+        try {
+            inventoryService.adjustStockByProduct(
+                    item.getProductId(),
+                    item.getQuantity()  // Возвращаем товар
+            );
+            log.info("Restored stock for product {} by {}",
+                    item.getProductId(), item.getQuantity());
+        } catch (ProductNotFoundException e) {
+            log.warn("Product not found: {}", item.getProductId());
         }
     }
 }
