@@ -1,0 +1,38 @@
+@page "/dashboard"
+@inject HttpClient Http
+
+<h3>Inventory Dashboard</h3>
+
+@if (inventoryItems == null) {
+    <p>Loading...</p>
+} else {
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Product ID</th>
+                <th>Stock</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var item in inventoryItems) {
+                <tr>
+                    <td>@item.ProductId</td>
+                    <td>@item.Stock</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private InventoryItem[] inventoryItems;
+
+    protected override async Task OnInitializedAsync() {
+        inventoryItems = await Http.GetFromJsonAsync<InventoryItem[]>("http://localhost:8080/inventory");
+    }
+
+    public class InventoryItem {
+        public Guid ProductId { get; set; }
+        public int Stock { get; set; }
+    }
+}
