@@ -1,38 +1,301 @@
 @page "/dashboard"
+@using System.ComponentModel.DataAnnotations
 @inject HttpClient Http
+@inject IJSRuntime JSRuntime
 
-<h3>Inventory Dashboard</h3>
+<RadzenCard>
+    <RadzenCardHeader>
+        <RadzenHeading Size="H3" Text="Inventory Management Dashboard"></RadzenHeading>
+    </RadzenCardHeader>
 
-@if (inventoryItems == null) {
-    <p>Loading...</p>
-} else {
-    <table class="table">
-        <thead>
-            <tr>
-                <th>Product ID</th>
-                <th>Stock</th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach (var item in inventoryItems) {
-                <tr>
-                    <td>@item.ProductId</td>
-                    <td>@item.Stock</td>
-                </tr>
-            }
-        </tbody>
-    </table>
-}
+    <RadzenCardBody>
+        <RadzenTabs RenderMode="TabRenderMode.Client">
+            <Tabs>
+                <RadzenTabsItem Text="Current Inventory">
+                    <InventoryTable Items="@inventoryItems"
+                                   OnAdjust="@HandleAdjustment"
+                                   OnReorder="@HandleReplenishment" />
+                </RadzenTabsItem>
+
+                <RadzenTabsItem Text="Demand Forecast">
+                    <RadzenGrid Data="@predictions" TItem="DemandPrediction" AllowFiltering="true">
+                        <Columns>
+                            <RadzenGridColumn Title="Product" Property="ProductName" />
+                            <RadzenGridColumn Title="Current Stock" Property="CurrentStock" />
+                            <RadzenGridColumn Title="Predicted Demand" Property="Prediction">
+                                <Template Context="pred">
+                                    <RadzenBadge Text="@($"{pred.Prediction:F0} units")"
+                                               Color="@(pred.Prediction > pred.CurrentStock ? BadgeColor.Danger : BadgeColor.Success)" />
+                                </Template>
+                            </RadzenGridColumn>
+                            <RadzenGridColumn Title="Action">
+                                <Template Context="pred">
+                                    <RadzenButton Text="Generate Report"
+                                                Click="@(() => GenerateReport(pred))"
+                                                Icon="description" />
+                                </Template>
+                            </RadzenGridColumn>
+                        </Columns>
+                    </RadzenGrid>
+
+                    <div class="mt-4">
+                        <RadzenChart>
+                            <RadzenColumnSeries Data="@predictions"
+                                              CategoryProperty="ProductName"
+                                              ValueProperty="Prediction" />
+                            <RadzenLineSeries Data="@predictions"
+                                            CategoryProperty="ProductName"
+                                            ValueProperty="CurrentStock" />
+                            <RadzenValueAxis Title="Units" />
+                            <RadzenLegend Position="LegendPosition.Right" />
+                            <RadzenTitle Text="Demand Forecast vs Current Stock" />
+                        </RadzenChart>
+                    </div>
+                </RadzenTabsItem>
+            </Tabs>
+        </RadzenTabs>
+    </RadzenCardBody>
+</RadzenCard>
+
+<RadzenDialog @ref="adjustDialog" Options="@adjustDialogOptions">
+    <Title>Adjust Inventory</Title>
+    <Content>
+        <RadzenTemplateForm TItem="AdjustmentModel" Data="@adjustmentModel" Submit="@SubmitAdjustment">
+            <RadzenFieldset Legend="Product">
+                <div class="row">
+                    <div class="col-md-6">
+                        <RadzenTextBox @bind-Value="@adjustmentModel.ProductName"
+                                      Disabled="true"
+                                      Label="Product Name" />
+                    </div>
+                    <div class="col-md-6">
+                        <RadzenTextBox @bind-Value="@adjustmentModel.ProductId"
+                                      Disabled="true"
+                                      Label="Product ID" />
+                    </div>
+                </div>
+            </RadzenFieldset>
+
+            <RadzenFieldset Legend="Adjustment">
+                <div class="row">
+                    <div class="col-md-6">
+                        <RadzenNumeric @bind-Value="@adjustmentModel.Delta"
+                                      Label="Adjustment Value"
+                                      Min="-1000" Max="1000" />
+                    </div>
+                    <div class="col-md-6">
+                        <RadzenDropDown @bind-Value="@adjustmentModel.Reason"
+                                       Data="@reasons"
+                                       Label="Reason"
+                                       TextProperty="Text"
+                                       ValueProperty="Value" />
+                    </div>
+                </div>
+            </RadzenFieldset>
+
+            <div class="row mt-3">
+                <div class="col-md-12">
+                    <RadzenButton ButtonType="ButtonType.Submit" Text="Apply" Icon="check" />
+                    <RadzenButton ButtonType="ButtonType.Button" Text="Cancel"
+                                 Click="@(() => adjustDialog.Close())"
+                                 Class="ml-2"
+                                 Icon="close" />
+                </div>
+            </div>
+        </RadzenTemplateForm>
+    </Content>
+</RadzenDialog>
 
 @code {
+    // Данные
     private InventoryItem[] inventoryItems;
+    private DemandPrediction[] predictions;
 
-    protected override async Task OnInitializedAsync() {
-        inventoryItems = await Http.GetFromJsonAsync<InventoryItem[]>("http://localhost:8080/inventory");
+    // Диалоговое окно
+    private RadzenDialog adjustDialog;
+    private DialogOptions adjustDialogOptions = new DialogOptions()
+    {
+        ShowClose = true,
+        CloseDialogOnOverlayClick = true
+    };
+
+    // Модель для корректировки запасов
+    private AdjustmentModel adjustmentModel = new AdjustmentModel();
+    private List<DropdownItem> reasons = new List<DropdownItem>
+    {
+        new DropdownItem { Value = "RESTOCK", Text = "Restock" },
+        new DropdownItem { Value = "SALE", Text = "Sale" },
+        new DropdownItem { Value = "RETURN", Text = "Return" },
+        new DropdownItem { Value = "DAMAGE", Text = "Damaged Goods" }
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Загрузка текущих запасов
+        inventoryItems = await Http.GetFromJsonAsync<InventoryItem[]>(
+            "http://localhost:8080/inventory");
+
+        // Загрузка прогнозов
+        predictions = await LoadPredictions();
     }
 
-    public class InventoryItem {
+    private async Task<DemandPrediction[]> LoadPredictions()
+    {
+        var predictionTasks = new List<Task<DemandPrediction>>();
+
+        foreach (var item in inventoryItems)
+        {
+            predictionTasks.Add(GetPredictionForProduct(item));
+        }
+
+        return await Task.WhenAll(predictionTasks);
+    }
+
+    private async Task<DemandPrediction> GetPredictionForProduct(InventoryItem item)
+    {
+        try
+        {
+            var response = await Http.PostAsJsonAsync(
+                "http://localhost:5000/predict",
+                new { product_id = item.ProductId.ToString() });
+
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<PredictionResponse>();
+                return new DemandPrediction
+                {
+                    ProductId = item.ProductId,
+                    ProductName = item.Name,
+                    CurrentStock = item.Stock,
+                    Prediction = result.Prediction
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading prediction: {ex.Message}");
+        }
+
+        // Fallback
+        return new DemandPrediction
+        {
+            ProductId = item.ProductId,
+            ProductName = item.Name,
+            CurrentStock = item.Stock,
+            Prediction = item.Stock * 0.8 // Простая эвристика
+        };
+    }
+
+    private void HandleAdjustment(InventoryItem item)
+    {
+        adjustmentModel = new AdjustmentModel
+        {
+            ProductId = item.ProductId.ToString(),
+            ProductName = item.Name,
+            CurrentStock = item.Stock
+        };
+        adjustDialog.Open();
+    }
+
+    private async Task SubmitAdjustment()
+    {
+        try
+        {
+            // Отправка запроса на бэкенд
+            var response = await Http.PostAsJsonAsync(
+                "http://localhost:8080/inventory/adjust",
+                new
+                {
+                    productId = Guid.Parse(adjustmentModel.ProductId),
+                    delta = adjustmentModel.Delta,
+                    reason = adjustmentModel.Reason
+                });
+
+            if (response.IsSuccessStatusCode)
+            {
+                // Обновление данных
+                inventoryItems = await Http.GetFromJsonAsync<InventoryItem[]>(
+                    "http://localhost:8080/inventory");
+                predictions = await LoadPredictions();
+
+                adjustDialog.Close();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Adjustment failed: {ex.Message}");
+        }
+    }
+
+    private async Task HandleReplenishment(InventoryItem item)
+    {
+        // Отправка запроса на пополнение
+        var response = await Http.PostAsJsonAsync(
+            "http://localhost:8080/inventory/replenish",
+            new { productId = item.ProductId });
+
+        if (response.IsSuccessStatusCode)
+        {
+            // Обновление данных
+            inventoryItems = await Http.GetFromJsonAsync<InventoryItem[]>(
+                "http://localhost:8080/inventory");
+        }
+    }
+
+    private async Task GenerateReport(DemandPrediction prediction)
+    {
+        // Генерация PDF отчета
+        var response = await Http.GetAsync(
+            $"http://localhost:8080/reports/demand?productId={prediction.ProductId}");
+
+        if (response.IsSuccessStatusCode)
+        {
+            var content = await response.Content.ReadAsByteArrayAsync();
+            await JSRuntime.InvokeVoidAsync("downloadFile",
+                $"demand_report_{prediction.ProductId}.pdf",
+                "application/pdf",
+                content);
+        }
+    }
+
+    // Класс модели для корректировки
+    public class AdjustmentModel
+    {
+        [Required]
+        public string ProductId { get; set; }
+
+        public string ProductName { get; set; }
+
+        [Required]
+        [Range(-1000, 1000, ErrorMessage = "Adjustment must be between -1000 and 1000")]
+        public int Delta { get; set; }
+
+        [Required]
+        public string Reason { get; set; }
+
+        public int CurrentStock { get; set; }
+    }
+
+    // Класс для прогнозов
+    public class DemandPrediction
+    {
         public Guid ProductId { get; set; }
-        public int Stock { get; set; }
+        public string ProductName { get; set; }
+        public int CurrentStock { get; set; }
+        public double Prediction { get; set; }
+    }
+
+    // Класс для выпадающего списка
+    public class DropdownItem
+    {
+        public string Value { get; set; }
+        public string Text { get; set; }
+    }
+
+    // Класс для ответа ML-сервиса
+    public class PredictionResponse
+    {
+        public string ProductId { get; set; }
+        public double Prediction { get; set; }
     }
 }
