@@ -1,0 +1,35 @@
+@using Radzen.Blazor
+
+<RadzenGrid Data="@Items" TItem="InventoryItem" AllowFiltering="true" AllowSorting="true">
+    <Columns>
+        <RadzenGridColumn Title="Product ID" Property="ProductId" />
+        <RadzenGridColumn Title="Product Name" Property="Name" />
+        <RadzenGridColumn Title="Category" Property="Category" />
+        <RadzenGridColumn Title="Current Stock" Property="Stock">
+            <Template Context="item">
+                <RadzenBadge Text="@item.Stock.ToString()" 
+                           Color="@(item.Stock < item.MinThreshold ? BadgeColor.Danger : BadgeColor.Success)" />
+            </Template>
+        </RadzenGridColumn>
+        <RadzenGridColumn Title="Min Threshold" Property="MinThreshold" />
+        <RadzenGridColumn Title="Actions">
+            <Template Context="item">
+                <RadzenButton Icon="edit" Click="@(() => OnAdjust.InvokeAsync(item))" 
+                            Class="mr-2" />
+                <RadzenButton Icon="inventory" Click="@(() => OnReorder.InvokeAsync(item))" 
+                            Text="Reorder" Color="ButtonColor.Primary" />
+            </Template>
+        </RadzenGridColumn>
+    </Columns>
+</RadzenGrid>
+
+@code {
+    [Parameter]
+    public InventoryItem[] Items { get; set; }
+    
+    [Parameter]
+    public EventCallback<InventoryItem> OnAdjust { get; set; }
+    
+    [Parameter]
+    public EventCallback<InventoryItem> OnReorder { get; set; }
+}

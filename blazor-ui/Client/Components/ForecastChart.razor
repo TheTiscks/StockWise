@@ -1,0 +1,13 @@
+<RadzenChart>
+    <RadzenColumnSeries Data="@Predictions"
+                        CategoryProperty="ProductName"
+                        ValueProperty="Prediction" />
+    <RadzenValueAxis FormatString="F0" />
+    <RadzenCategoryAxis />
+    <RadzenLegend Position="LegendPosition.Right" />
+</RadzenChart>
+
+@code {
+    [Parameter]
+    public List<InventoryDashboard.DemandPrediction> Predictions { get; set; }
+}
