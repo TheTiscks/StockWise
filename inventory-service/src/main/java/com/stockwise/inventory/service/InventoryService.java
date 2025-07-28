@@ -157,3 +157,41 @@ public List<InventoryHistory> getInventoryHistory(UUID productId, int days) {
 public List<InventoryItem> getLowStockItems() {
     return repository.findByQuantityLessThan(minThreshold);
 }
+
+
+//ML INTEGRATION
+private final RestTemplate restTemplate;
+
+public int calculateRequiredQuantity(InventoryItem item) {
+    try {
+        // Получение прогноза спроса
+        PredictionResponse prediction = restTemplate.postForObject(
+                "http://ml-service:5000/predict",
+                new PredictionRequest(item.getProduct().getProductId()),
+                PredictionResponse.class
+        );
+
+        // Расчет необходимого количества
+        int safetyStock = (int) Math.ceil(prediction.getPrediction() * 1.2);
+        return Math.max(0, safetyStock - item.getQuantity());
+
+    } catch (Exception e) {
+        // Fallback: простая эвристика
+        return Math.max(0, item.getMinThreshold() - item.getQuantity());
+    }
+}
+
+@Scheduled(fixedRate = 3600000) // Каждый час
+public void autoReplenish() {
+    List<InventoryItem> lowStockItems = getLowStockItems();
+
+    for (InventoryItem item : lowStockItems) {
+        int requiredQuantity = calculateRequiredQuantity(item);
+        if (requiredQuantity > 0) {
+            createReplenishmentOrder(
+                    item.getProduct().getProductId(),
+                    requiredQuantity
+            );
+        }
+    }
+}
