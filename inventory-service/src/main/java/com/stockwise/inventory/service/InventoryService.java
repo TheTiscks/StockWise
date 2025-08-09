@@ -1,5 +1,27 @@
 package com.stockwise.inventory.service;
 
+import com.stockwise.inventory.model.InventoryItem;
+import com.stockwise.inventory.model.Product;
+import com.stockwise.inventory.model.InventoryHistory;
+import com.stockwise.inventory.repository.InventoryRepository;
+import com.stockwise.inventory.repository.ProductRepository;
+import com.stockwise.inventory.repository.HistoryRepository;
+import com.stockwise.inventory.event.InventoryEvent;
+import com.stockwise.inventory.event.ReplenishmentEvent;
+import com.stockwise.inventory.exception.InsufficientStockException;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.web.client.RestTemplate;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+
 @Service
 @Transactional
 public class InventoryService {
@@ -7,25 +29,37 @@ public class InventoryService {
     private final ProductRepository productRepository;
     private final HistoryRepository historyRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private final RestTemplate restTemplate;
 
     public InventoryService(
             InventoryRepository repository,
             ProductRepository productRepository,
             HistoryRepository historyRepository,
-            KafkaTemplate<String, String> kafkaTemplate
+            KafkaTemplate<String, String> kafkaTemplate,
+            RestTemplate restTemplate
     ) {
         this.repository = repository;
         this.productRepository = productRepository;
         this.historyRepository = historyRepository;
         this.kafkaTemplate = kafkaTemplate;
+        this.restTemplate = restTemplate;
     }
 
+    @Cacheable(value = "inventory", key = "#productId")
     public InventoryItem getInventoryItem(UUID productId) {
         return repository.findByProductProductId(productId)
-                .orElseThrow(() -> new EntityNotFoundException("Inventory not found for product: " + productId));
+                .orElseThrow(() -> new RuntimeException("Inventory not found for product: " + productId));
+    }
+
+    @Cacheable(value = "products", key = "#productId")
+    public Product getProduct(UUID productId) {
+        return productRepository.findByProductId(productId)
+                .orElseThrow(() -> new RuntimeException("Product not found: " + productId));
     }
 
     @Transactional
+    @CacheEvict(value = "inventory", key = "#productId")
+    @CachePut(value = "inventory", key = "#productId")
     public InventoryItem adjustStock(UUID productId, int delta, String reason) {
         InventoryItem item = getInventoryItem(productId);
         int oldQuantity = item.getQuantity();
@@ -50,6 +84,7 @@ public class InventoryService {
     }
 
     @Transactional
+    @CacheEvict(value = "inventory", key = "#productId")
     public void createReplenishmentOrder(UUID productId, int quantity) {
         InventoryItem item = getInventoryItem(productId);
 
@@ -64,8 +99,51 @@ public class InventoryService {
         replenishmentOrderRepository.save(order);
         sendReplenishmentEvent(order);
 
-        // Автоматическое пополнение (можно вынести в отдельный метод)
+        // Автоматическое пополнение
         adjustStock(productId, quantity, "AUTO_REPLENISHMENT");
+    }
+
+    @Cacheable(value = "predictions", key = "#productId")
+    public double getDemandPrediction(UUID productId) {
+        try {
+            // Получение прогноза из ML-сервиса
+            String url = "http://ml-service:5000/api/ml/predict";
+            PredictionRequest request = new PredictionRequest(productId.toString());
+            
+            PredictionResponse response = restTemplate.postForObject(url, request, PredictionResponse.class);
+            return response != null ? response.getPrediction() : 0.0;
+            
+        } catch (Exception e) {
+            // Fallback: простая эвристика
+            return 10.0;
+        }
+    }
+
+    @Cacheable(value = "inventory", key = "'low_stock'")
+    public List<InventoryItem> getLowStockItems() {
+        return repository.findByQuantityLessThan(minThreshold);
+    }
+
+    @Scheduled(fixedRate = 3600000) // Каждый час
+    public void autoReplenish() {
+        List<InventoryItem> lowStockItems = getLowStockItems();
+
+        for (InventoryItem item : lowStockItems) {
+            double prediction = getDemandPrediction(item.getProduct().getProductId());
+            int requiredQuantity = calculateRequiredQuantity(item, prediction);
+            
+            if (requiredQuantity > 0) {
+                createReplenishmentOrder(
+                        item.getProduct().getProductId(),
+                        requiredQuantity
+                );
+            }
+        }
+    }
+
+    private int calculateRequiredQuantity(InventoryItem item, double prediction) {
+        int safetyStock = (int) Math.ceil(prediction * 1.2); // +20% буфер
+        return Math.max(0, safetyStock - item.getQuantity());
     }
 
     private void recordHistory(InventoryItem item, String action, int delta, String reason) {
@@ -96,102 +174,30 @@ public class InventoryService {
         );
         kafkaTemplate.send("replenishment-orders", event.toJson());
     }
-}
 
-@Transactional
-public List<InventoryItem> bulkUpdate(List<InventoryItem> updates) {
-    return updates.stream()
-            .map(update -> {
-                InventoryItem item = repository.findById(update.getId())
-                        .orElseThrow(() -> new InventoryNotFoundException(update.getId()));
-                item.setQuantity(update.getQuantity());
-                return repository.save(item);
-            })
-            .collect(Collectors.toList());
-}
-
-// Реализуем историю изменений
-public List<InventoryHistory> getInventoryHistory(UUID productId) {
-    return historyRepository.findByProductProductIdOrderByTimestampDesc(productId);
-}
-
-private void recordHistory(InventoryItem item, String action) {
-    InventoryHistory history = new InventoryHistory();
-    history.setInventoryItem(item);
-    history.setAction(action);
-    history.setQuantityChange(item.getQuantity());
-    history.setTimestamp(Instant.now());
-    historyRepository.save(history);
-}
-
-// Обновляем метод adjustStock
-public InventoryItem adjustStock(Long itemId, int delta) {
-    InventoryItem item = repository.findById(itemId)
-            .orElseThrow(() -> new InventoryNotFoundException(itemId));
-
-    int oldQuantity = item.getQuantity();
-    int newQuantity = oldQuantity + delta;
-
-    if (newQuantity < 0) {
-        throw new InsufficientStockException("Cannot reduce stock below zero");
+    // Вспомогательные классы для ML-интеграции
+    public static class PredictionRequest {
+        private String product_id;
+        
+        public PredictionRequest(String product_id) {
+            this.product_id = product_id;
+        }
+        
+        public String getProduct_id() {
+            return product_id;
+        }
     }
 
-    item.setQuantity(newQuantity);
-    InventoryItem updated = repository.save(item);
-
-    // Записываем историю
-    recordHistory(item, "ADJUSTMENT");
-
-    return updated;
-}
-
-public List<InventoryHistory> getInventoryHistory(UUID productId, int days) {
-    Instant fromDate = Instant.now().minus(days, ChronoUnit.DAYS);
-
-    return historyRepository.findByInventoryItemProductProductIdAndTimestampAfterOrderByTimestampDesc(
-            productId,
-            fromDate
-    );
-}
-
-public List<InventoryItem> getLowStockItems() {
-    return repository.findByQuantityLessThan(minThreshold);
-}
-
-
-//ML INTEGRATION
-private final RestTemplate restTemplate;
-
-public int calculateRequiredQuantity(InventoryItem item) {
-    try {
-        // Получение прогноза спроса
-        PredictionResponse prediction = restTemplate.postForObject(
-                "http://ml-service:5000/predict",
-                new PredictionRequest(item.getProduct().getProductId()),
-                PredictionResponse.class
-        );
-
-        // Расчет необходимого количества
-        int safetyStock = (int) Math.ceil(prediction.getPrediction() * 1.2);
-        return Math.max(0, safetyStock - item.getQuantity());
-
-    } catch (Exception e) {
-        // Fallback: простая эвристика
-        return Math.max(0, item.getMinThreshold() - item.getQuantity());
-    }
-}
-
-@Scheduled(fixedRate = 3600000) // Каждый час
-public void autoReplenish() {
-    List<InventoryItem> lowStockItems = getLowStockItems();
-
-    for (InventoryItem item : lowStockItems) {
-        int requiredQuantity = calculateRequiredQuantity(item);
-        if (requiredQuantity > 0) {
-            createReplenishmentOrder(
-                    item.getProduct().getProductId(),
-                    requiredQuantity
-            );
+    public static class PredictionResponse {
+        private String product_id;
+        private double prediction;
+        
+        public String getProduct_id() {
+            return product_id;
+        }
+        
+        public double getPrediction() {
+            return prediction;
         }
     }
 }

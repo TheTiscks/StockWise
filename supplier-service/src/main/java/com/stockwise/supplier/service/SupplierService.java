@@ -1,75 +1,153 @@
 package com.stockwise.supplier.service;
 
+import com.stockwise.supplier.model.Supplier;
+import com.stockwise.supplier.model.Contract;
+import com.stockwise.supplier.repository.SupplierRepository;
+import com.stockwise.supplier.repository.ContractRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.beans.factory.annotation.Value;
+
+import java.util.List;
+import java.util.Optional;
+
 @Service
+@Transactional
 public class SupplierService {
     private final SupplierRepository supplierRepository;
     private final ContractRepository contractRepository;
+    private final KafkaTemplate<String, String> kafkaTemplate;
 
-    public Contract addContract(Long supplierId, Contract contract) {
-        Supplier supplier = supplierRepository.findById(supplierId)
-                .orElseThrow(() -> new SupplierNotFoundException(supplierId));
+    @Value("${kafka.topics.supplier-events}")
+    private String supplierTopic;
 
-        // Валидация дат контракта
-        if (contract.getStartDate().isAfter(contract.getEndDate())) {
-            throw new InvalidContractException("End date must be after start date");
-        }
-
-        contract.setSupplier(supplier);
-        return contractRepository.save(contract);
+    public SupplierService(SupplierRepository supplierRepository,
+                          ContractRepository contractRepository,
+                          KafkaTemplate<String, String> kafkaTemplate) {
+        this.supplierRepository = supplierRepository;
+        this.contractRepository = contractRepository;
+        this.kafkaTemplate = kafkaTemplate;
     }
 
-    public Contract updateContract(Long contractId, Contract updatedContract) {
-        Contract contract = contractRepository.findById(contractId)
-                .orElseThrow(() -> new ContractNotFoundException(contractId));
+    // CRUD операции для поставщиков
+    public Supplier createSupplier(Supplier supplier) {
+        Supplier savedSupplier = supplierRepository.save(supplier);
+        sendSupplierEvent(savedSupplier, "SUPPLIER_CREATED");
+        return savedSupplier;
+    }
 
-        // Обновляем только допустимые поля
-        contract.setTerms(updatedContract.getTerms());
-        contract.setDeliveryDays(updatedContract.getDeliveryDays());
-        contract.setEndDate(updatedContract.getEndDate());
+    public Supplier getSupplierById(Long id) {
+        return supplierRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Supplier not found: " + id));
+    }
 
-        return contractRepository.save(contract);
+    public List<Supplier> getAllSuppliers(int page, int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Supplier> supplierPage = supplierRepository.findAll(pageable);
+        return supplierPage.getContent();
+    }
+
+    public Supplier updateSupplier(Long id, Supplier supplierDetails) {
+        Supplier supplier = getSupplierById(id);
+        supplier.setName(supplierDetails.getName());
+        supplier.setContactEmail(supplierDetails.getContactEmail());
+        supplier.setPhoneNumber(supplierDetails.getPhoneNumber());
+        supplier.setAddress(supplierDetails.getAddress());
+        supplier.setStatus(supplierDetails.getStatus());
+        
+        Supplier updatedSupplier = supplierRepository.save(supplier);
+        sendSupplierEvent(updatedSupplier, "SUPPLIER_UPDATED");
+        return updatedSupplier;
+    }
+
+    public void deleteSupplier(Long id) {
+        Supplier supplier = getSupplierById(id);
+        supplierRepository.delete(supplier);
+        sendSupplierEvent(supplier, "SUPPLIER_DELETED");
+    }
+
+    // Операции с контрактами
+    public Contract addContract(Long supplierId, Contract contract) {
+        Supplier supplier = getSupplierById(supplierId);
+        contract.setSupplier(supplier);
+        Contract savedContract = contractRepository.save(contract);
+        sendContractEvent(savedContract, "CONTRACT_CREATED");
+        return savedContract;
     }
 
     public List<Contract> getActiveContracts(Long supplierId) {
-        Supplier supplier = supplierRepository.findById(supplierId)
-                .orElseThrow(() -> new SupplierNotFoundException(supplierId));
-
-        Instant now = Instant.now();
-        return supplier.getContracts().stream()
-                .filter(c -> c.getStartDate().isBefore(now) && c.getEndDate().isAfter(now))
-                .collect(Collectors.toList());
+        return contractRepository.findBySupplierIdAndIsActiveTrue(supplierId);
     }
-}
 
-// Автоматическое создание заказов поставщикам
-@Scheduled(cron = "0 0 8 * * *") // Ежедневно в 8 утра
-public void generateSupplierOrders() {
-    List<ProductShortage> shortages = inventoryClient.getLowStockProducts();
-
-    for (ProductShortage shortage : shortages) {
-        Supplier preferredSupplier = findPreferredSupplier(shortage.getProductId());
-
-        PurchaseOrder po = new PurchaseOrder();
-        po.setProductId(shortage.getProductId());
-        po.setQuantity(shortage.getRequiredQuantity());
-        po.setSupplierId(preferredSupplier.getId());
-        po.setDueDate(calculateDeliveryDate(preferredSupplier));
-
-        purchaseOrderRepository.save(po);
-        sendSupplierEvent(po, "PURCHASE_ORDER_CREATED");
+    public Contract updateContract(Long contractId, Contract contractDetails) {
+        Contract contract = contractRepository.findById(contractId)
+                .orElseThrow(() -> new RuntimeException("Contract not found: " + contractId));
+        
+        contract.setContractNumber(contractDetails.getContractNumber());
+        contract.setStartDate(contractDetails.getStartDate());
+        contract.setEndDate(contractDetails.getEndDate());
+        contract.setTerms(contractDetails.getTerms());
+        contract.setDeliveryDays(contractDetails.getDeliveryDays());
+        contract.setPaymentConditions(contractDetails.getPaymentConditions());
+        contract.setStatus(contractDetails.getStatus());
+        
+        Contract updatedContract = contractRepository.save(contract);
+        sendContractEvent(updatedContract, "CONTRACT_UPDATED");
+        return updatedContract;
     }
-}
 
-private LocalDate calculateDeliveryDate(Supplier supplier) {
-    // Рассчитываем дату поставки на основе условий контракта
-    Contract activeContract = getActiveContract(supplier.getId());
-    int deliveryDays = activeContract != null ? activeContract.getDeliveryDays() : 7;
+    public void deleteContract(Long contractId) {
+        Contract contract = contractRepository.findById(contractId)
+                .orElseThrow(() -> new RuntimeException("Contract not found: " + contractId));
+        contractRepository.delete(contract);
+        sendContractEvent(contract, "CONTRACT_DELETED");
+    }
 
-    return LocalDate.now().plusDays(deliveryDays);
-}
+    // Дополнительные операции
+    public Double getSupplierRating(Long id) {
+        Supplier supplier = getSupplierById(id);
+        return supplier.getRating();
+    }
 
-// Уведомления о истекающих контрактах
-public List<Contract> getExpiringContracts(int daysBeforeExpiration) {
-    LocalDate threshold = LocalDate.now().plusDays(daysBeforeExpiration);
-    return contractRepository.findByEndDateBetween(LocalDate.now(), threshold);
+    public void rateSupplier(Long id, Double rating) {
+        Supplier supplier = getSupplierById(id);
+        supplier.setRating(rating);
+        supplierRepository.save(supplier);
+        sendSupplierEvent(supplier, "SUPPLIER_RATED");
+    }
+
+    public List<Supplier> searchSuppliers(String query, int page, int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        return supplierRepository.findByNameContainingIgnoreCaseOrContactEmailContainingIgnoreCase(
+                query, query, pageable);
+    }
+
+    // Интеграция с системой пополнения
+    public List<Supplier> getAvailableSuppliersForProduct(String productId) {
+        // Логика выбора поставщиков для конкретного продукта
+        return supplierRepository.findByStatusAndContractsIsActiveTrue(Supplier.SupplierStatus.ACTIVE);
+    }
+
+    public Contract getBestContractForProduct(String productId, int quantity) {
+        // Логика выбора лучшего контракта для заказа
+        List<Contract> availableContracts = contractRepository.findByStatusAndIsActiveTrue(Contract.ContractStatus.ACTIVE);
+        return availableContracts.stream()
+                .filter(contract -> contract.getMinOrderQuantity() <= quantity && 
+                                  (contract.getMaxOrderQuantity() == null || contract.getMaxOrderQuantity() >= quantity))
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("No suitable contract found"));
+    }
+
+    // Отправка событий в Kafka
+    private void sendSupplierEvent(Supplier supplier, String eventType) {
+        // Реализация отправки события
+    }
+
+    private void sendContractEvent(Contract contract, String eventType) {
+        // Реализация отправки события
+    }
 }

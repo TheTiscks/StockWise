@@ -1,20 +1,44 @@
 package com.stockwise.supplier.model;
 
 import jakarta.persistence.*;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 @Entity
+@Table(name = "suppliers")
 public class Supplier {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @NotBlank(message = "Supplier name is required")
+    @Column(nullable = false)
     private String name;
+
+    @Email(message = "Invalid email format")
+    @Column(name = "contact_email")
     private String contactEmail;
+
+    @Column(name = "phone_number")
     private String phoneNumber;
+
     private String address;
+
+    @Column(name = "tax_id")
+    private String taxId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status")
+    private SupplierStatus status = SupplierStatus.ACTIVE;
+
+    @Column(name = "rating")
+    private Double rating;
+
+    @Column(name = "delivery_time_avg")
+    private Integer deliveryTimeAvg;
 
     @OneToMany(
             mappedBy = "supplier",
@@ -22,6 +46,10 @@ public class Supplier {
             orphanRemoval = true
     )
     private List<Contract> contracts = new ArrayList<>();
+
+    public enum SupplierStatus {
+        ACTIVE, INACTIVE, SUSPENDED
+    }
 
     public Supplier() {
     }

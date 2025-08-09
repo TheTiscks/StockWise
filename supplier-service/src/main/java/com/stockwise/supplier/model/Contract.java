@@ -1,27 +1,60 @@
 package com.stockwise.supplier.model;
 
 import jakarta.persistence.*;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Objects;
 
 @Entity
+@Table(name = "contracts")
 public class Contract {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "supplier_id")
+    @JoinColumn(name = "supplier_id", nullable = false)
     private Supplier supplier;
 
+    @NotNull(message = "Contract number is required")
+    @Column(name = "contract_number", nullable = false, unique = true)
     private String contractNumber;
+
+    @NotNull(message = "Start date is required")
+    @Column(name = "start_date", nullable = false)
     private LocalDate startDate;
+
+    @Column(name = "end_date")
     private LocalDate endDate;
+
+    @Positive(message = "Terms must be positive")
+    @Column(precision = 10, scale = 2)
     private BigDecimal terms;
-    private int deliveryDays;
+
+    @Column(name = "delivery_days")
+    private Integer deliveryDays;
+
+    @Column(name = "payment_conditions")
     private String paymentConditions;
+
+    @Column(name = "is_active")
     private boolean isActive = true;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status")
+    private ContractStatus status = ContractStatus.DRAFT;
+
+    @Column(name = "min_order_quantity")
+    private Integer minOrderQuantity;
+
+    @Column(name = "max_order_quantity")
+    private Integer maxOrderQuantity;
+
+    public enum ContractStatus {
+        DRAFT, ACTIVE, EXPIRED, TERMINATED
+    }
 
     public Contract() {
     }
