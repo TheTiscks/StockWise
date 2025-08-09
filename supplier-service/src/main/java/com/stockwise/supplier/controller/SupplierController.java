@@ -97,4 +97,33 @@ public class SupplierController {
             @RequestParam(defaultValue = "20") int size) {
         return ResponseEntity.ok(supplierService.searchSuppliers(query, page, size));
     }
+
+    // Интеграция с системой пополнения
+    @GetMapping("/available-for-product")
+    public ResponseEntity<List<Supplier>> getAvailableSuppliersForProduct(
+            @RequestParam String productId) {
+        return ResponseEntity.ok(supplierService.getAvailableSuppliersForProduct(productId));
+    }
+
+    @GetMapping("/best-contract")
+    public ResponseEntity<Contract> getBestContractForProduct(
+            @RequestParam String productId,
+            @RequestParam int quantity) {
+        return ResponseEntity.ok(supplierService.getBestContractForProduct(productId, quantity));
+    }
+
+    @PostMapping("/auto-order")
+    public ResponseEntity<Void> createAutomaticOrder(
+            @RequestParam String productId,
+            @RequestParam int quantity) {
+        supplierService.createAutomaticOrder(productId, quantity);
+        return ResponseEntity.ok().build();
+    }
+
+    @GetMapping("/{supplierId}/expiring-contracts")
+    public ResponseEntity<List<Contract>> getExpiringContracts(
+            @PathVariable Long supplierId,
+            @RequestParam(defaultValue = "30") int daysBeforeExpiration) {
+        return ResponseEntity.ok(supplierService.getExpiringContracts(supplierId, daysBeforeExpiration));
+    }
 }
