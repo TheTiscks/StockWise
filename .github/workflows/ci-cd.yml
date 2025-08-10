@@ -98,6 +98,8 @@ jobs:
         mvn clean test
         cd ../supplier-service
         mvn clean test
+        cd ../order-service
+        mvn clean test
     
     - name: Run Python tests
       run: |
@@ -223,6 +225,24 @@ jobs:
       run: |
         echo "Deployment completed successfully!"
         # Здесь будет уведомление о деплое
+
+  smoke-test:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Smoke test services
+      run: |
+        docker-compose up -d --build
+        sleep 40
+        curl --fail http://localhost:8080/actuator/health
+        curl --fail http://localhost:8081/actuator/health
+        curl --fail http://localhost:8082/actuator/health
+        curl --fail http://localhost:5000/health
+        docker-compose down
 
 
 
