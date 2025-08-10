@@ -3,6 +3,9 @@ package com.stockwise.order.service;
 import com.stockwise.order.model.Order;
 import com.stockwise.order.model.OrderItem;
 import com.stockwise.order.repository.OrderRepository;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -36,6 +39,7 @@ public class OrderService {
     }
 
     // CRUD операции для заказов
+    @CacheEvict(value = "orders", allEntries = true)
     public Order createOrder(Order order) {
         // Генерируем номер заказа если не указан
         if (order.getOrderNumber() == null || order.getOrderNumber().isEmpty()) {
@@ -50,21 +54,25 @@ public class OrderService {
         return savedOrder;
     }
 
+    @Cacheable(value = "orders", key = "#id")
     public Order getOrderById(Long id) {
         return orderRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Order not found: " + id));
     }
 
+    @Cacheable(value = "orders", key = "#orderNumber")
     public Order getOrderByOrderNumber(String orderNumber) {
         return orderRepository.findByOrderNumber(orderNumber);
     }
 
+    @Cacheable(value = "orders", key = "'all_' + #page + '_' + #size")
     public List<Order> getAllOrders(int page, int size) {
         Pageable pageable = PageRequest.of(page, size);
         Page<Order> orderPage = orderRepository.findAll(pageable);
         return orderPage.getContent();
     }
 
+    @CacheEvict(value = "orders", allEntries = true)
     public Order updateOrder(Long id, Order orderDetails) {
         Order order = getOrderById(id);
         
@@ -79,6 +87,7 @@ public class OrderService {
         return updatedOrder;
     }
 
+    @CacheEvict(value = "orders", allEntries = true)
     public void deleteOrder(Long id) {
         Order order = getOrderById(id);
         orderRepository.delete(order);
@@ -86,6 +95,7 @@ public class OrderService {
     }
 
     // Операции со статусом заказа
+    @CacheEvict(value = "orders", allEntries = true)
     public Order confirmOrder(Long id) {
         Order order = getOrderById(id);
         order.setStatus(Order.OrderStatus.CONFIRMED);
@@ -94,6 +104,7 @@ public class OrderService {
         return confirmedOrder;
     }
 
+    @CacheEvict(value = "orders", allEntries = true)
     public Order startProcessing(Long id) {
         Order order = getOrderById(id);
         order.setStatus(Order.OrderStatus.IN_PROGRESS);
@@ -102,6 +113,7 @@ public class OrderService {
         return processingOrder;
     }
 
+    @CacheEvict(value = "orders", allEntries = true)
     public Order shipOrder(Long id) {
         Order order = getOrderById(id);
         order.setStatus(Order.OrderStatus.SHIPPED);
@@ -110,6 +122,7 @@ public class OrderService {
         return shippedOrder;
     }
 
+    @CacheEvict(value = "orders", allEntries = true)
     public Order deliverOrder(Long id) {
         Order order = getOrderById(id);
         order.setStatus(Order.OrderStatus.DELIVERED);
@@ -119,6 +132,7 @@ public class OrderService {
         return deliveredOrder;
     }
 
+    @CacheEvict(value = "orders", allEntries = true)
     public Order cancelOrder(Long id) {
         Order order = getOrderById(id);
         order.setStatus(Order.OrderStatus.CANCELLED);
@@ -128,28 +142,34 @@ public class OrderService {
     }
 
     // Запросы и фильтрация
+    @Cacheable(value = "orders", key = "#supplierId")
     public List<Order> getOrdersBySupplier(Long supplierId) {
         return orderRepository.findBySupplierId(supplierId);
     }
 
+    @Cacheable(value = "orders", key = "#status")
     public List<Order> getOrdersByStatus(Order.OrderStatus status) {
         return orderRepository.findByStatus(status);
     }
 
+    @Cacheable(value = "orders", key = "#productId")
     public List<Order> getOrdersByProduct(String productId) {
         return orderRepository.findByProductId(productId);
     }
 
+    @Cacheable(value = "orders", key = "'pending_' + #page + '_' + #size")
     public List<Order> getPendingOrders(int page, int size) {
         Pageable pageable = PageRequest.of(page, size);
         Page<Order> pendingOrdersPage = orderRepository.findPendingOrders(pageable);
         return pendingOrdersPage.getContent();
     }
 
+    @Cacheable(value = "orders", key = "'overdue'")
     public List<Order> getOverdueOrders() {
         return orderRepository.findOverdueOrders(LocalDateTime.now());
     }
 
+    @Cacheable(value = "orders", key = "#startDate + '_' + #endDate")
     public List<Order> getOrdersByDateRange(LocalDateTime startDate, LocalDateTime endDate) {
         return orderRepository.findByOrderDateBetween(startDate, endDate);
     }

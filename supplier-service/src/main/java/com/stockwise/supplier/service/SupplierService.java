@@ -4,6 +4,9 @@ import com.stockwise.supplier.model.Supplier;
 import com.stockwise.supplier.model.Contract;
 import com.stockwise.supplier.repository.SupplierRepository;
 import com.stockwise.supplier.repository.ContractRepository;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -46,23 +49,27 @@ public class SupplierService {
     }
 
     // CRUD операции для поставщиков
+    @CacheEvict(value = "suppliers", allEntries = true)
     public Supplier createSupplier(Supplier supplier) {
         Supplier savedSupplier = supplierRepository.save(supplier);
         sendSupplierEvent(savedSupplier, "SUPPLIER_CREATED");
         return savedSupplier;
     }
 
+    @Cacheable(value = "suppliers", key = "#id")
     public Supplier getSupplierById(Long id) {
         return supplierRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Supplier not found: " + id));
     }
 
+    @Cacheable(value = "suppliers", key = "'all_' + #page + '_' + #size")
     public List<Supplier> getAllSuppliers(int page, int size) {
         Pageable pageable = PageRequest.of(page, size);
         Page<Supplier> supplierPage = supplierRepository.findAll(pageable);
         return supplierPage.getContent();
     }
 
+    @CacheEvict(value = "suppliers", allEntries = true)
     public Supplier updateSupplier(Long id, Supplier supplierDetails) {
         Supplier supplier = getSupplierById(id);
         supplier.setName(supplierDetails.getName());
@@ -76,6 +83,7 @@ public class SupplierService {
         return updatedSupplier;
     }
 
+    @CacheEvict(value = "suppliers", allEntries = true)
     public void deleteSupplier(Long id) {
         Supplier supplier = getSupplierById(id);
         supplierRepository.delete(supplier);
@@ -83,6 +91,7 @@ public class SupplierService {
     }
 
     // Операции с контрактами
+    @CacheEvict(value = "contracts", allEntries = true)
     public Contract addContract(Long supplierId, Contract contract) {
         Supplier supplier = getSupplierById(supplierId);
         contract.setSupplier(supplier);
@@ -91,10 +100,12 @@ public class SupplierService {
         return savedContract;
     }
 
+    @Cacheable(value = "contracts", key = "#supplierId")
     public List<Contract> getActiveContracts(Long supplierId) {
         return contractRepository.findBySupplierIdAndIsActiveTrue(supplierId);
     }
 
+    @CacheEvict(value = "contracts", allEntries = true)
     public Contract updateContract(Long contractId, Contract contractDetails) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new RuntimeException("Contract not found: " + contractId));
@@ -112,6 +123,7 @@ public class SupplierService {
         return updatedContract;
     }
 
+    @CacheEvict(value = "contracts", allEntries = true)
     public void deleteContract(Long contractId) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new RuntimeException("Contract not found: " + contractId));
