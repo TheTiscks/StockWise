@@ -2,6 +2,7 @@ package com.stockwise.order.service;
 
 import com.stockwise.order.model.Order;
 import com.stockwise.order.model.OrderItem;
+import com.stockwise.order.model.OrderStats;
 import com.stockwise.order.repository.OrderRepository;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.CachePut;
@@ -164,12 +165,12 @@ public class OrderService {
         return pendingOrdersPage.getContent();
     }
 
-    @Cacheable(value = "orders", key = "'overdue'")
+    @Cacheable(value = "order-stats", key = "'overdue'")
     public List<Order> getOverdueOrders() {
         return orderRepository.findOverdueOrders(LocalDateTime.now());
     }
 
-    @Cacheable(value = "orders", key = "#startDate + '_' + #endDate")
+    @Cacheable(value = "order-stats", key = "#startDate + '_' + #endDate")
     public List<Order> getOrdersByDateRange(LocalDateTime startDate, LocalDateTime endDate) {
         return orderRepository.findByOrderDateBetween(startDate, endDate);
     }
@@ -194,6 +195,18 @@ public class OrderService {
                 confirmOrder(order.getId());
             }
         }
+    }
+
+    // Статистика заказов
+    @Cacheable(value = "order-stats", key = "'total_stats'")
+    public OrderStats getOrderStats() {
+        long totalOrders = orderRepository.count();
+        long pendingOrders = orderRepository.countByStatus(Order.OrderStatus.PENDING);
+        long confirmedOrders = orderRepository.countByStatus(Order.OrderStatus.CONFIRMED);
+        long deliveredOrders = orderRepository.countByStatus(Order.OrderStatus.DELIVERED);
+        long cancelledOrders = orderRepository.countByStatus(Order.OrderStatus.CANCELLED);
+        
+        return new OrderStats(totalOrders, pendingOrders, confirmedOrders, deliveredOrders, cancelledOrders);
     }
 
     // Вспомогательные методы
