@@ -2,6 +2,7 @@ package com.stockwise.supplier.service;
 
 import com.stockwise.supplier.model.Supplier;
 import com.stockwise.supplier.model.Contract;
+import com.stockwise.supplier.model.SupplierStats;
 import com.stockwise.supplier.repository.SupplierRepository;
 import com.stockwise.supplier.repository.ContractRepository;
 import org.springframework.cache.annotation.CacheEvict;
@@ -148,6 +149,18 @@ public class SupplierService {
         Pageable pageable = PageRequest.of(page, size);
         return supplierRepository.findByNameContainingIgnoreCaseOrContactEmailContainingIgnoreCase(
                 query, query, pageable);
+    }
+
+    // Статистика поставщиков
+    @Cacheable(value = "supplier-stats", key = "'total_stats'")
+    public SupplierStats getSupplierStats() {
+        long totalSuppliers = supplierRepository.count();
+        long activeSuppliers = supplierRepository.countByStatus(SupplierStatus.ACTIVE);
+        long inactiveSuppliers = supplierRepository.countByStatus(SupplierStatus.INACTIVE);
+        long highRatedSuppliers = supplierRepository.countByRatingGreaterThanEqual(4.0);
+        
+        return new SupplierStats(totalSuppliers, activeSuppliers, inactiveSuppliers, highRatedSuppliers);
+    }
     }
 
     // Интеграция с системой пополнения

@@ -32,4 +32,10 @@ public interface SupplierRepository extends JpaRepository<Supplier, Long> {
     
     @Query("SELECT s FROM Supplier s WHERE s.deliveryTimeAvg <= :maxDeliveryDays")
     List<Supplier> findByDeliveryTimeAvgLessThanEqual(@Param("maxDeliveryDays") Integer maxDeliveryDays);
+    
+    @Query("SELECT COUNT(s) FROM Supplier s WHERE s.status = :status")
+    Long countByStatus(@Param("status") Supplier.SupplierStatus status);
+    
+    @Query("SELECT COUNT(s) FROM Supplier s WHERE s.rating >= :minRating")
+    Long countByRatingGreaterThanEqual(@Param("minRating") Double minRating);
 }
